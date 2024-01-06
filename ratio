@@ -1,0 +1,85 @@
+#!/bin/bash
+if [ "$#" -ne 3 ]; then
+  echo "Usage: $0 T1_path T2_path ratio_output_path"
+  exit 1
+fi
+
+current_T1=$1
+current_T2=$2
+ratio_output=$3
+
+T1name=$(echo $current_T1 | rev | cut -d'/' -f1 | rev)
+T2name=$(echo $current_T2 | rev | cut -d'/' -f1 | rev)
+
+if find $ratio_output -type f -name "$T1name" -print -quit | grep -q .; then
+  echo "Already registered to MNI space $T1name. Pass"
+else
+  echo "Registering T1w to MNI space........."
+  python3 registration.py $current_T1 $ratio_output/$T1name
+fi
+
+if find $ratio_output -type f -name "$T2name" -print -quit | grep -q .; then
+  echo "Already registered to MNI space $T2name. Pass"
+else
+  echo "Registering T2w to MNI space........."
+  python3 registration.py $current_T2 $ratio_output/$T2name
+fi
+
+if find $ratio_output -type f -name "${T1name}_segmentation.nii.gz" -print -quit | grep -q .; then
+  echo "Already Segmentated. Pass"
+else
+  echo "Performing segmentation with mri_synthseg on T1w ........."
+  mri_synthseg --i $ratio_output/$T1name --o $ratio_output/${T1name}_segmentation.nii.gz
+fi
+
+current_T1_folder=$(echo $current_T1 | rev | cut -d/ -f2-100 | rev)
+current_T2_folder=$(echo $current_T2 | rev | cut -d/ -f2-100 | rev)
+
+if find $ratio_output -type f -name "m$T2name" -print -quit | grep -q .; then
+  echo "Already bias corrected $current_T2. Pass"
+  rm $ratio_output/c*$T2name*
+  rm $ratio_output/*$(echo $T2name | cut -d'.' -f1)*mat
+else
+  echo "Bias correcting T2w ........."
+  echo matlab -r "bias_correct('$ratio_output/$T2name', '/ihome/tibrahim/jil202/spm12', 60, 4, 'false')"
+  matlab -r "bias_correct('$ratio_output/$T2name', '/ihome/tibrahim/jil202/spm12', 60, 4, 'false')"
+
+  rm $ratio_output/c*$T2name*
+  rm $ratio_output/*$(echo $T2name | cut -d'.' -f1)*mat
+fi
+
+if find $ratio_output -type f -name "m$T1name" -print -quit | grep -q .; then
+  echo "Already bias corrected $current_T1. Pass"
+  rm $ratio_output/c*$T2name*
+  rm $ratio_output/*$(echo $T2name | cut -d'.' -f1)*mat
+else
+  echo "Bias correcting T1w ........."
+  echo matlab -r "bias_correct('$ratio_output/$T1name', '/ihome/tibrahim/jil202/spm12', 60, 4, 'false')"
+  matlab -r "bias_correct('$ratio_output/$T1name', '/ihome/tibrahim/jil202/spm12', 60, 4, 'false')"
+
+  rm $ratio_output/c*$T1name*
+  rm $ratio_output/*$(echo $T1name | cut -d'.' -f1)*mat
+
+fi
+
+current_mT1=($ratio_output/m*$T1name*)
+current_mT2=($ratio_output/m*$T2name*)
+
+mT1_name=$(echo "$current_mT1" | rev | cut -d'/' -f1 | rev)
+mT1_name=$(echo "$mT1_name" | cut -d'.' -f1)
+mT1_name=$(echo "$mT1_name" | cut -d'_' -f1-3)_fcm_T1.nii.gz
+T1_output="$ratio_output/$mT1_name"
+
+mT2_name=$(echo "$current_mT2" | rev | cut -d'/' -f1 | rev)
+mT2_name=$(echo "$mT2_name" | cut -d'.' -f1)
+mT2_name=$(echo "$mT2_name" | cut -d'_' -f1-3)_fcm_T2.nii.gz
+T2_output="$ratio_output/$mT2_name"
+
+mri_synthstrip -i $current_mT1 -m $ratio_output/mT1_mask.nii.gz
+fcm-normalize $current_mT1 -m $ratio_output/mT1_mask.nii.gz -o $T1_output -v -mo t1 -tt wm
+wm_nii=($ratio_output/*wm_membership*)
+fcm-normalize $current_mT2 -tm $wm_nii -o $T2_output -v -mo t2
+python3 ./ratio.py $T1_output $T2_output $ratio_output/$(echo $T1name | cut -d'_' -f1)_ratio.nii.gz
+mri_synthstrip -i $ratio_output/$(echo $T1name | cut -d'_' -f1)_ratio.nii.gz -o $ratio_output/$(echo $T1name | cut -d'_' -f1)_ratio.nii
+python3 ./gen_ratio_wm.py $ratio_output/${T1name}_segmentation.nii.gz $ratio_output/$(echo $T1name | cut -d'_' -f1)_ratio.nii $ratio_output/wm_$(echo $ratio_output | rev | cut -d'/' -f1 | rev)_ratio.nii.gz
+python3 ./registration.py $ratio_output/wm_$(echo $ratio_output | rev | cut -d'/' -f1 | rev)_ratio.nii.gz $ratio_output/mni_$(echo $ratio_output | rev | cut -d'/' -f1 | rev)_ratio.nii.gz
